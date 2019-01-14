@@ -55,6 +55,7 @@ class Compiler {
       }
     })
   }
+
   /**
      * @param {textNode}: 文本节点
      *
@@ -84,6 +85,18 @@ class Compiler {
         })
         parent.replaceChild(fragment, textNode)
   }
+
+  /**
+     * @param {text}: 文本节点内文字
+     *
+     * @desc:
+     * ①：主要内容为对文本进行切割，切割格式如下:
+     *    普通文本|mustache语法文本|普通文本
+     * ②：切割完毕后符合mustche语法的文本则为tag；
+     * ③：将所有切割后的文本放入tokens中
+     *
+     * @return {tokens}
+     */
   compilerText(text) {
     let mustacheRe = /\{\{(.*?)\}\}/g,
         lastIndex = 0,
@@ -117,11 +130,41 @@ class Compiler {
 
     return textList
   }
+
+  /**
+     * @param {node}: 元素节点
+     *
+     * @desc:
+     * ①：获取该元素节点的子节点和它的属性;
+     * ②：遍历属性列表然后判断属性中是否存在指令病过滤出该指令，
+     *    代入指令集中进行处理
+    */
+  compileNodeElement(node) {
+    let children = node.childNodes,
+        attrs = node.attributes
+    Array.from(attrs).forEach(attr => {
+      /* 获取属性名字 */
+      let name = attr.name
+      /* 判断是否存在指令 */
+      if (name.indexOf('v-') > -1) {
+        /* 获取指令的值和类型 */
+        let value = attr.value,
+            type = name.substring(2);
+        directives[type](node, this.vm, value, type)
+      }
+    })
+    if (children && children.length > 0) {
+      this.compileElement(node)
+    }
+  }
 }
 
 const directives = {
   text(node, vm, exp, type) {
-    this.bind(node, vm, exp, 'text')
+    this.bind(node, vm, exp, type)
+  },
+  model(node, vm, exp, type) {
+    this.bind(node, vm, exp, type)
   },
   /* 根据类型来统一绑定数据 */
   bind(node, vm, exp, type) {
@@ -144,6 +187,10 @@ const updater = {
   text(node, exp, val) {
     node.textContent = val
   },
+  /* v-model */
+  model(node, exp, val) {
+    node.value = val
+  }
 }
 
 export default Compiler
