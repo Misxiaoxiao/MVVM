@@ -1,4 +1,5 @@
 import Compiler from './Compiler.js'
+import observer from './Observer.js'
 
 class MVVM {
   constructor(options) {
@@ -9,6 +10,8 @@ class MVVM {
     Object.keys(this.data).forEach(key => {
       this.setProxy(key)
     })
+
+    observer(this.data, this)
     /* 编译节点 */
     new Compiler(this.el, this)
   }
@@ -20,12 +23,15 @@ class MVVM {
    * 目标: vm.data.xxx => vm.xxx
    */
   setProxy(key) {
+    let _this = this
     Object.defineProperty(this, key, {
+      configurable: false,
+      enumerable: true,
       get() {
-        return this.data[key]
+        return _this.data[key]
       },
       set(newVal) {
-        this.data[key] = newVal
+        _this.data[key] = newVal
       }
     })
   }

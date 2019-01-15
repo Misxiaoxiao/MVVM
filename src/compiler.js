@@ -1,3 +1,5 @@
+import Watcher from './watcher.js'
+
 class Compiler {
   constructor(el, vm) {
     this.el = document.querySelector(el)
@@ -46,11 +48,14 @@ class Compiler {
      * ③-2(元素节点): 执行元素节点编译;
     */
   compileElement(fragment) {
-    let children = fragment.childNodes
+    console.log(111)
+    let children = fragment.childNodes,
+        reg = /\{\{(.*)\}\}/g
     Array.from(children).forEach(node => {
+      let text = node.textContent
       if (node.nodeType === 1) {
         this.compileNodeElement(node)
-      } else if (node.nodeType === 3) {
+      } else if (node.nodeType === 3 && reg.test(text)) {
         this.compileTextNode(node)
       }
     })
@@ -68,22 +73,22 @@ class Compiler {
      *
     */
   compileTextNode(textNode) {
-    let textList = this.compilerText(textNode.textContent),
+    let tokens = this.compilerText(textNode.textContent),
         fragment = document.createDocumentFragment(),
         parent = textNode.parentNode;
-        textList.forEach(text => {
-          let el
-          /* 如果是tag类型进行text取值 */
-          if (text.tag) {
-            el = document.createTextNode('')
-            /* 传入空文本点el，当前vm，tag文本，绑定类型 */
-            directives.text(el, this.vm, text.value, 'text')
-          } else {
-            el = document.createTextNode(text.value)
-          }
-          fragment.appendChild(el)
-        })
-        parent.replaceChild(fragment, textNode)
+    tokens.forEach(token => {
+      let el
+      /* 如果是tag类型进行text取值 */
+      if (token.tag) {
+        el = document.createTextNode('')
+        /* 传入空文本点el，当前vm，tag文本，绑定类型 */
+        directives.text(el, this.vm, token.value)
+      } else {
+        el = document.createTextNode(token.value)
+      }
+      fragment.appendChild(el)
+    })
+    parent.replaceChild(fragment, textNode)
   }
 
   /**
@@ -100,20 +105,21 @@ class Compiler {
   compilerText(text) {
     let mustacheRe = /\{\{(.*?)\}\}/g,
         lastIndex = 0,
-        textList = [],
-        match, value;
+        tokens = [],
+        match, value, index;
 
     while(match = mustacheRe.exec(text)) {
+      index = match.index
       /* 得到{{...}}前的普通文本放进textList中 */
-      if (match.index > lastIndex) {
-        textList.push({
+      if (index > lastIndex) {
+        tokens.push({
           value: text.slice(lastIndex, match.index)
         })
       }
 
       /* 将{{...}}里的键名作为tag传入textList中 */
       value = match[1]
-      textList.push({
+      tokens.push({
         value,
         tag: true
       })
@@ -123,12 +129,12 @@ class Compiler {
     }
     /* 将剩余普通文本内放入textList */
     if (lastIndex < text.length) {
-      textList.push({
+      tokens.push({
         value: text.slice(lastIndex)
       })
     }
 
-    return textList
+    return tokens
   }
 
   /**
@@ -144,34 +150,76 @@ class Compiler {
         attrs = node.attributes
     Array.from(attrs).forEach(attr => {
       /* 获取属性名字 */
-      let name = attr.name
+      let name = attr.name,
+          reg = /:/
       /* 判断是否存在指令 */
-      if (name.indexOf('v-') > -1) {
+      if (this.isDirective(name)) {
         /* 获取指令的值和类型 */
         let value = attr.value,
-            type = name.substring(2);
-        directives[type](node, this.vm, value, type)
+            type = name.substring(2),
+            index, eventType
+        if (reg.test(type)) {
+          index = reg.exec(type).index
+          eventType = type.substring(index + 1)
+          type = type.substring(0, index)
+        }
+        directives[type](node, this.vm, value, type, eventType)
       }
     })
+
     if (children && children.length > 0) {
       this.compileElement(node)
     }
+  }
+  isDirective(name) {
+    return name.indexOf('v-') > -1
   }
 }
 
 const directives = {
   text(node, vm, exp, type) {
-    this.bind(node, vm, exp, type)
+    this.bindData(node, vm, exp, 'text')
   },
   model(node, vm, exp, type) {
-    this.bind(node, vm, exp, type)
+    this.bindData(node, vm, exp, type)
   },
-  /* 根据类型来统一绑定数据 */
-  bind(node, vm, exp, type) {
-    let newVal = this.getVMData(vm, exp)
-    updater[type](node, exp, newVal)
+  on(node, vm, exp, type, event) {
+    node.addEventListener(event, vm.methods[exp].bind(vm))
   },
-  /* 用于获取data中的值 */
+  /**
+   * @param {node}: 元素节点
+   * @param {vm}: MVVM实例：用于拿data对象中的数据
+   * @param {value}: 指令绑定的data中的键
+   * @param {type}: 指令类型
+   *
+   * @desc:
+   * ①：通过value获取到data中相应的值；
+   * ②：执行更新器updater中对应指令的函数进行更新；
+   * ③：新建一个watcher实例对该属性进行监听，
+   *    传入当前vm，该属性名称，以及触发更新时的回调函数;
+   */
+  bindData(node, vm, exp, type, compiler) {
+    let newVal = this.getVMData(vm, exp),
+        updaterView = updater[type]
+    updaterView(node, vm, exp, newVal, compiler)
+
+    new Watcher(vm, exp, newVal => {
+      updaterView(node, vm, exp, newVal, compiler)
+      Object.keys(vm.watch).forEach(key => {
+        if (key === exp) {
+          vm.watch[key](newVal)
+        }
+      })
+    })
+  },
+  /**
+   * @param {vm}: MVVM的实例
+   * @param {tag}: 过滤得出的键名
+   *
+   * @desc:
+   * ①：查找在vm的data对象上符合键名的值，然后返回
+   * ②：要注意message.msg这种情况
+   */
   getVMData(vm, exp) {
     let expArr = exp.split('.'),
         val = vm
@@ -184,12 +232,33 @@ const directives = {
 
 const updater = {
   /* 更新文本类型 */
-  text(node, exp, val) {
-    node.textContent = val
+  text(node, vm, exp, newVal) {
+    node.textContent = newVal
   },
   /* v-model */
-  model(node, exp, val) {
-    node.value = val
+  model(node, vm, exp, newVal) {
+    node.value = newVal
+    /**
+     * @desc:
+     * 当输入新内容时对vm.data的相应属性旧值进行设置
+     */
+    node.addEventListener('input', e => {
+      updater.setVMData(vm, exp, e.target.value)
+    })
+  },
+  /**
+   * 该处触发相应属性的setter
+   */
+  setVMData(vm, exp, newVal) {
+    let expArr = exp.split('.'),
+        val = vm.data
+    expArr.forEach((key, i) => {
+      if (i === expArr.length - 1) {
+        val[key] = newVal
+      } else {
+        val = val[key]
+      }
+    })
   }
 }
 
